@@ -223,6 +223,40 @@ void print_hex(const std::vector<uint8_t>& p, size_t from, size_t maxn) {
     for (size_t i = from; i < p.size() && i < from + maxn; ++i) std::printf("%02x", p[i]);
 }
 
+// Wayside (0x33/0x34) status: a WIU ID (24-bit) then packed indicator bits.
+// Field bit order (from the reference): MSB-first; switch = 2 bits (I/N/R/X);
+// signal = 5 bits whose bits are then reversed; hazard/bit = 1 bit. The exact
+// per-WIU layout (how many switches/signals) is user-configured in ITCMon; here
+// we decode a typical 1-switch + 3-signal WIU as a best effort.
+void print_wiu(const std::vector<uint8_t>& p) {
+    std::printf("  WIU=%06x data=", tid24(p));
+    print_hex(p, 3, 16);
+    const size_t n = p.size() > 3 ? p.size() - 3 : 0;
+    if (n == 0) { std::printf("\n"); return; }
+    const uint8_t* d = p.data() + 3;
+    size_t bit = 0;
+    auto read_bits = [&](int k) {
+        int v = 0;
+        for (int i = 0; i < k; ++i) {
+            const size_t bi = bit >> 3;
+            const int b = (bi < n) ? ((d[bi] >> (7 - (bit & 7))) & 1) : 0;
+            v = (v << 1) | b;
+            ++bit;
+        }
+        return v;
+    };
+    auto rev5 = [](int v) { int r = 0; for (int i = 0; i < 5; ++i) { r = (r << 1) | (v & 1); v >>= 1; } return r; };
+    if (n * 8 >= 17) {
+        static const char kSw[5] = "INRX";
+        const int sw = read_bits(2);
+        const int s1 = rev5(read_bits(5));
+        const int s2 = rev5(read_bits(5));
+        const int s3 = rev5(read_bits(5));
+        std::printf("  [typical] sw=%c sig=%d,%d,%d", kSw[sw & 3], s1, s2, s3);
+    }
+    std::printf("\n");
+}
+
 void print_packet(int channel, const char* mode, const Found& f) {
     char ts[16];
     std::time_t t = std::time(nullptr);
@@ -247,6 +281,8 @@ void print_packet(int channel, const char* mode, const Found& f) {
         // CNTL: TID(3), Seq#(1), Data(8).
         std::printf("  TID=%06x seq=%d data=", tid24(p), p[3]);
         print_hex(p, 4, 16);
+    } else if ((f.type == 0x33 || f.type == 0x34) && p.size() >= 3) {
+        print_wiu(p);
     } else if (p.size() >= 3) {
         std::printf("  TID=%06x  ", tid24(p));
         print_hex(p, 3, 32);

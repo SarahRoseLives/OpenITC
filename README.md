@@ -95,7 +95,9 @@ Link types: `0x01` QSTAT, `0x02` beacon, `0x03` ACK, `0x04` ACQ, `0x05` CNTL
 (TID + Seq# + data), `0x06` TIME (UTC date/time), `0x07` T07, `0x33`/`0x34` WIU
 status, `0x70` unicast. Beacons show radio id, lat/lon, local channel and channel
 list; TIME shows the base's UTC clock; CNTL shows the transmitter TID, sequence
-number and payload; WIU shows the wayside unit TID.
+number and payload; WIU (0x33/0x34) shows the wayside unit ID plus a best-effort
+switch/signal indicator decode (the exact per-WIU layout is normally configured
+in ITCMon, so the raw indicator bytes are always shown too).
 
 ### Capture / channelize
 

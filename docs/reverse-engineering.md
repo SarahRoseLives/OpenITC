@@ -142,6 +142,56 @@ Validity requires `21 <= lat <= 70` and `-170 <= lon <= -50`.
 | 0x38282D | 41.831817 | -80.768800 | 142 | 1 | 18 | 167,166,165,153,142,127 |
 | 0x38282E | 41.946383 | -80.568917 | 166 | 1 | 11 | 166,153,142,141,127,126 |
 
+## ITC link layer (from the author's documentation)
+
+Sources: the ITCMon author's own docs,
+`github.com/katsojuna/itcmon/blob/main/doc/2-itc-overview.txt` (plus
+`3-software-details.txt` and `4-naming-indicators.txt`), the FRA
+*PTC Radio Functional Specification* and *ITC 220 MHz Radio* specifications, and
+the PTCTalk community. ITC = Interoperable Train Control (Meteorcomm/MCC).
+
+Packet structure: an encoded + CRC-checked header (length, type, modulation —
+the modulation field appears unused), then data, then optional HMAC and CRC.
+The data is sent in interleaved blocks with a "12,16" FEC code (= our
+RS(16,12)). Addressing at the radio link layer is a 24-bit radio ID; messages
+are broadcasts with no ID (e.g. wayside status), TX-ID only, or TX + RX IDs.
+Important messages carry an HMAC we can receive but not verify.
+
+Link-layer packet types (1-7 manage the radio protocol):
+
+| type | name | meaning |
+|---|---|---|
+| 0x01 | QSTAT | remote -> base: request TDMA slots for extra transmissions |
+| 0x02 | Base Beacon | base broadcasts GPS coords + local channel list |
+| 0x03 | ACK | acknowledgement (exact use unclear) |
+| 0x04 | ACQ | loco / mobile entering a new base territory |
+| 0x05 | CNTL | base, start of each superframe: allocates TDMA slots |
+| 0x06 | TIME | UTC date/time broadcast |
+| 0x07 | T07 | **unknown** — the author lists it as unknown |
+| 0x33 | WIU status | wayside (WIU) periodic status broadcast |
+| 0x34 | WIU status | same, sent in response to a status request |
+| 0x70 | All Others | mostly unicast; EMP / ATCS-over-ITC messages |
+
+(`openitc monitor` labels these types; TIME is decoded to a UTC timestamp, CNTL
+to TID + Seq# + data, and 0x33/0x34 to WIU indicators.)
+
+## Wayside (WIU) status — types 0x33 / 0x34
+
+Payload = 24-bit WIU radio ID, then packed indicator bits. Field bit order is
+MSB-first; a common WIU is 1 switch + 3 signals:
+
+- switch: 2 bits -> `I` / `N` / `R` / `X` (Invalid / Normal / Reverse / unknown)
+- signal: 5 bits, **bit-reversed**, then looked up in a per-railroad signal table
+- hazard / bit: 1 bit
+
+The exact layout (how many switches/signals, their order, and signal names) is
+per-WIU and user-configured in ITCMon (`wius/<rr>/<rr><sub>.json`). OpenITC
+decodes the typical 1-switch + 3-signal layout as a best effort and always shows
+the raw indicator bytes.
+
+Verified against the reference's own example: data `BD EF 00` -> switch `R`,
+signals 15, 15, 15.
+
 ## Validation
 
 - Replaying MCR's captured UDP datagrams into a standalone `s2p -r <port> -m HR` decodes packets.
