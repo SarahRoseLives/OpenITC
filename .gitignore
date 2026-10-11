@@ -1,0 +1,22 @@
+# Build output
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+
+# Captures and large media (not part of the source)
+captures/
+*.iq
+*.cf32
+*.wav
+*.bin
+
+# Compiled artifacts / runtime DLLs
+*.o
+*.obj
+*.a
+*.exe
+*.dll
+
+# Documents that may be third-party / copyrighted
+*.pdf
