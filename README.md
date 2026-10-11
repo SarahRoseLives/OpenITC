@@ -90,6 +90,13 @@ needs a WinUSB driver (e.g. via Zadig).
 `monitor` options: `-t <ms>` chunk size (default 250), `-C <s>` per-packet repeat
 cooldown (default 8), `-E <n>` max sync errors (default 8), plus `-d/-s/-g/-e/-b`.
 
+Each line shows time, channel, rate (FR/HR), the link type, and decoded fields.
+Link types: `0x01` QSTAT, `0x02` beacon, `0x03` ACK, `0x04` ACQ, `0x05` CNTL
+(TID + Seq# + data), `0x06` TIME (UTC date/time), `0x07` T07, `0x33`/`0x34` WIU
+status, `0x70` unicast. Beacons show radio id, lat/lon, local channel and channel
+list; TIME shows the base's UTC clock; CNTL shows the transmitter TID, sequence
+number and payload; WIU shows the wayside unit TID.
+
 ### Capture / channelize
 
 ```sh

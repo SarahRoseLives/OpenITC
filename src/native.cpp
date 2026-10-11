@@ -200,15 +200,27 @@ std::vector<Found> decode_stream(const std::vector<cf>& y, int max_errors) {
 
 const char* type_name(int t) {
     switch (t) {
+        case 0x01: return "QSTAT";
         case 0x02: return "beacon";
-        case 0x05: return "5";
-        case 0x06: return "6";
-        case 0x07: return "7";
+        case 0x03: return "ACK";
+        case 0x04: return "ACQ";
+        case 0x05: return "CNTL";
+        case 0x06: return "TIME";
+        case 0x07: return "T07";
         case 0x31: return "31";
-        case 0x34: return "34";
+        case 0x33: return "WIU";
+        case 0x34: return "WIU";
         case 0x70: return "unicast";
         default: return "";
     }
+}
+
+uint32_t tid24(const std::vector<uint8_t>& p) {
+    return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+}
+
+void print_hex(const std::vector<uint8_t>& p, size_t from, size_t maxn) {
+    for (size_t i = from; i < p.size() && i < from + maxn; ++i) std::printf("%02x", p[i]);
 }
 
 void print_packet(int channel, const char* mode, const Found& f) {
@@ -227,9 +239,20 @@ void print_packet(int channel, const char* mode, const Found& f) {
         std::printf("  id=%06x lat=%.6f lon=%.6f ch=%d rate=%d util=%d list=%d,%d,%d,%d,%d,%d",
                     rid, lat / 600000.0, lon / 600000.0, p[12], p[13], p[14], p[16], p[17],
                     p[18], p[19], p[20], p[21]);
+    } else if (f.type == 0x06 && p.size() >= 9) {
+        // TIME: TID(3) then year-2000, month, day, hour, minute, second (UTC).
+        std::printf("  TID=%06x  %04d-%02d-%02d %02d:%02d:%02d UTC", tid24(p), 2000 + p[3],
+                    p[4], p[5], p[6], p[7], p[8]);
+    } else if (f.type == 0x05 && p.size() >= 4) {
+        // CNTL: TID(3), Seq#(1), Data(8).
+        std::printf("  TID=%06x seq=%d data=", tid24(p), p[3]);
+        print_hex(p, 4, 16);
+    } else if (p.size() >= 3) {
+        std::printf("  TID=%06x  ", tid24(p));
+        print_hex(p, 3, 32);
     } else {
         std::printf("  ");
-        for (size_t i = 0; i < p.size() && i < 32; ++i) std::printf("%02x", p[i]);
+        print_hex(p, 0, 32);
     }
     std::printf("\n");
 }
