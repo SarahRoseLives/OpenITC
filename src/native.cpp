@@ -24,6 +24,39 @@ namespace {
 
 void fail(const char* m) { std::fprintf(stderr, "error: %s\n", m); std::exit(1); }
 
+void demod_usage() {
+    std::printf(
+        "Usage: openitc demod [options]\n"
+        "  Decode one ITC channel with the native PHY (demod + FEC).\n"
+        "  -c <channel>  ITC channel                    (default 142)\n"
+        "  -m <HR|FR>    rate                           (default FR)\n"
+        "  -f <file>     decode an offline baseband capture (complex float32)\n"
+        "                instead of capturing live\n"
+        "  -s <rate>     capture sample rate in Hz      (default 960000)\n"
+        "  -g <db>       tuner gain, 0 for AGC          (default 40.2)\n"
+        "  -e <ppm>      frequency correction           (default 0)\n"
+        "  -b <0|1>      bias tee                       (default 1 = on)\n"
+        "  -n <n>        number of I/Q samples to read  (default 960000)\n"
+        "  -E <n>        max sync bit errors            (default 8)\n"
+        "  -h            show this help and exit\n");
+}
+
+void monitor_usage() {
+    std::printf(
+        "Usage: openitc monitor [options]\n"
+        "  Scan every PTC channel from one wideband capture and list packets\n"
+        "  as they arrive, until interrupted (Ctrl-C).\n"
+        "  -d <index>    RTL device index               (default 0)\n"
+        "  -s <rate>     capture rate in Hz, multiple of 192000 (default 2304000)\n"
+        "  -g <db>       tuner gain, 0 for AGC          (default 42.0)\n"
+        "  -e <ppm>      frequency correction           (default 0)\n"
+        "  -b <0|1>      bias tee                       (default 1 = on)\n"
+        "  -t <ms>       capture chunk size in ms       (default 250)\n"
+        "  -C <s>        per-packet repeat cooldown (s) (default 8)\n"
+        "  -E <n>        max sync bit errors            (default 8)\n"
+        "  -h            show this help and exit\n");
+}
+
 }  // namespace
 
 std::vector<cf> capture_channel(long channel, const std::string& mode,
@@ -60,7 +93,8 @@ int run_demod(int argc, char** argv) {
             if (i + 1 >= argc) fail("missing argument");
             return argv[++i];
         };
-        if (a == "-c") channel = std::atol(next());
+        if (a == "-h" || a == "--help") { demod_usage(); return 0; }
+        else if (a == "-c") channel = std::atol(next());
         else if (a == "-s") cfg.sample_rate = (uint32_t)std::strtoul(next(), nullptr, 10);
         else if (a == "-g") {
             double g = std::atof(next());
@@ -218,7 +252,8 @@ int run_monitor(int argc, char** argv) {
             if (i + 1 >= argc) fail("missing argument");
             return argv[++i];
         };
-        if (a == "-d") cfg.device_index = std::atoi(next());
+        if (a == "-h" || a == "--help") { monitor_usage(); return 0; }
+        else if (a == "-d") cfg.device_index = std::atoi(next());
         else if (a == "-s") cfg.sample_rate = (uint32_t)std::strtoul(next(), nullptr, 10);
         else if (a == "-g") {
             double g = std::atof(next());

@@ -43,6 +43,24 @@ void fail(const char* msg) {
     std::exit(1);
 }
 
+void decode_usage() {
+    std::printf(
+        "Usage: openitc decode [options]\n"
+        "  Decode one channel using the reference s2p engine (legacy path).\n"
+        "  -c <channel>  ITC channel                     (default 102)\n"
+        "  -m <HR|FR>    rate                            (default HR)\n"
+        "  -s <rate>     capture sample rate in Hz       (default 960000)\n"
+        "  -g <db>       tuner gain, 0 for AGC           (default 40.2)\n"
+        "  -e <ppm>      frequency correction            (default 0)\n"
+        "  -b <0|1>      bias tee                        (default 1 = on)\n"
+        "  -n <n>        samples per read                (default 960000)\n"
+        "  --s2p <path>  path to s2p.exe\n"
+        "  --udp <port>  UDP port (ZMQ listens on port+1000) (default 17700)\n"
+        "  --loop        keep capturing until Ctrl-C\n"
+        "  -q            print only beacons\n"
+        "  -h            show this help and exit\n");
+}
+
 void write_be16(uint8_t* p, uint16_t v) {
     p[0] = uint8_t(v >> 8);
     p[1] = uint8_t(v & 0xff);
@@ -90,7 +108,8 @@ Options parse(int argc, char** argv) {
             if (i + 1 >= argc) fail("missing argument");
             return argv[++i];
         };
-        if (a == "-c") o.channel = std::atol(next());
+        if (a == "-h" || a == "--help") { decode_usage(); std::exit(0); }
+        else if (a == "-c") o.channel = std::atol(next());
         else if (a == "-s") o.cfg.sample_rate = (uint32_t)std::strtoul(next(), nullptr, 10);
         else if (a == "-g") {
             double g = std::atof(next());

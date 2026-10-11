@@ -17,7 +17,12 @@ void usage() {
     std::printf(
         "OpenITC - console RTL-SDR receiver for ITC (220 MHz PTC)\n"
         "\n"
-        "Usage: openitc [options]\n"
+        "Usage: openitc [capture options]     capture / channelize I/Q\n"
+        "       openitc monitor [options]     scan all PTC channels, list packets live\n"
+        "       openitc demod   [options]     decode one channel (native PHY)\n"
+        "       openitc decode  [options]     decode one channel via reference s2p\n"
+        "\n"
+        "Capture options:\n"
         "  -d <index>   RTL device index              (default 0)\n"
         "  -f <hz>      center frequency in Hz        (default 220137500 = ch 102)\n"
         "  -c <channel> ITC channel (freq = 217587500 + ch*25000)\n"
@@ -28,9 +33,14 @@ void usage() {
         "  -n <n>       number of I/Q samples to read (default 960000)\n"
         "  -R <rate>    channelize: mix target channel to DC and decimate to\n"
         "               this baseband rate (e.g. 96000 for HR); output is\n"
-        "               interleaved complex float32 (the s2p input format)\n"
+        "               interleaved complex float32\n"
+        "  -G <scale>   output scale for channelized samples (default 0.001)\n"
         "  -o <file>    write captured I/Q to file\n"
-        "  -l           list devices and exit\n");
+        "  -l           list devices and exit\n"
+        "  -h           show this help and exit\n"
+        "\n"
+        "Run 'openitc monitor -h', 'openitc demod -h' or 'openitc decode -h'\n"
+        "for subcommand options.\n");
 }
 
 }  // namespace
