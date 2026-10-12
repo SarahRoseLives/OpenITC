@@ -13,10 +13,14 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "dsp.h"
+#include "engine.h"
 #include "itc.h"
+#include "model.h"
+#include "repository.h"
 #include "rtl_source.h"
 
 namespace openitc {
@@ -168,121 +172,42 @@ int run_demod(int argc, char** argv) {
 
 namespace {
 
-struct Found {
-    int type;
-    std::vector<uint8_t> payload;
-    int errors;
-};
-
-// Demod + FEC-decode one channel's baseband; returns unique packets.
-std::vector<Found> decode_stream(const std::vector<cf>& y, int max_errors) {
-    const int sps = 12;
-    std::vector<Found> out;
-    std::vector<std::string> seen;
-    for (int o = 0; o < sps; ++o) {
-        std::vector<uint8_t> bits;
-        pi4dqpsk_demod(y, sps, o, bits);
-        auto hits = find_sync(bits, max_errors);
-        for (auto h : hits) {
-            auto bytes = pack_bits_msb(bits, h.bit_pos, kUniqueWordLen + 6 * 8 + 256 * 8);
-            if (bytes.size() < 14) continue;
-            ItcPacket pkt;
-            if (!decode_packet(bytes, pkt) || !pkt.valid) continue;
-            std::string key((const char*)pkt.payload.data(), pkt.payload.size());
-            key.push_back((char)pkt.type);
-            if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
-            seen.push_back(key);
-            out.push_back({pkt.type, pkt.payload, h.errors});
-        }
-    }
-    return out;
-}
-
-const char* type_name(int t) {
-    switch (t) {
-        case 0x01: return "QSTAT";
-        case 0x02: return "beacon";
-        case 0x03: return "ACK";
-        case 0x04: return "ACQ";
-        case 0x05: return "CNTL";
-        case 0x06: return "TIME";
-        case 0x07: return "T07";
-        case 0x31: return "31";
-        case 0x33: return "WIU";
-        case 0x34: return "WIU";
-        case 0x70: return "unicast";
-        default: return "";
-    }
-}
-
-uint32_t tid24(const std::vector<uint8_t>& p) {
-    return ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
-}
-
 void print_hex(const std::vector<uint8_t>& p, size_t from, size_t maxn) {
     for (size_t i = from; i < p.size() && i < from + maxn; ++i) std::printf("%02x", p[i]);
 }
 
-// Wayside (0x33/0x34) status: a WIU ID (24-bit) then packed indicator bits.
-// Field bit order (from the reference): MSB-first; switch = 2 bits (I/N/R/X);
-// signal = 5 bits whose bits are then reversed; hazard/bit = 1 bit. The exact
-// per-WIU layout (how many switches/signals) is user-configured in ITCMon; here
-// we decode a typical 1-switch + 3-signal WIU as a best effort.
-void print_wiu(const std::vector<uint8_t>& p) {
-    std::printf("  WIU=%06x data=", tid24(p));
-    print_hex(p, 3, 16);
-    const size_t n = p.size() > 3 ? p.size() - 3 : 0;
-    if (n == 0) { std::printf("\n"); return; }
-    const uint8_t* d = p.data() + 3;
-    size_t bit = 0;
-    auto read_bits = [&](int k) {
-        int v = 0;
-        for (int i = 0; i < k; ++i) {
-            const size_t bi = bit >> 3;
-            const int b = (bi < n) ? ((d[bi] >> (7 - (bit & 7))) & 1) : 0;
-            v = (v << 1) | b;
-            ++bit;
-        }
-        return v;
-    };
-    auto rev5 = [](int v) { int r = 0; for (int i = 0; i < 5; ++i) { r = (r << 1) | (v & 1); v >>= 1; } return r; };
-    if (n * 8 >= 17) {
+void print_wiu(const WiuInfo& w) {
+    std::printf("  WIU=%06x data=", w.wiu_id);
+    print_hex(w.indicators, 0, 16);
+    if (w.has_typical) {
         static const char kSw[5] = "INRX";
-        const int sw = read_bits(2);
-        const int s1 = rev5(read_bits(5));
-        const int s2 = rev5(read_bits(5));
-        const int s3 = rev5(read_bits(5));
-        std::printf("  [typical] sw=%c sig=%d,%d,%d", kSw[sw & 3], s1, s2, s3);
+        std::printf("  [typical] sw=%c sig=%d,%d,%d", kSw[w.sw & 3], w.sig[0], w.sig[1],
+                    w.sig[2]);
     }
     std::printf("\n");
 }
 
-void print_packet(int channel, const char* mode, const Found& f) {
+void print_event(const PacketEvent& e) {
     char ts[16];
-    std::time_t t = std::time(nullptr);
+    std::time_t t = (std::time_t)e.t_unix;
     std::strftime(ts, sizeof(ts), "%H:%M:%S", std::localtime(&t));
-    const auto& p = f.payload;
-    std::printf("[%s] ch%03d %s  type=%02x %-7s len=%zu", ts, channel, mode, f.type,
-                type_name(f.type), p.size());
-    if (f.type == 0x02 && p.size() >= 22) {
-        const uint32_t rid = ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
-        const int32_t lat = (int32_t)(((uint32_t)p[4] << 24) | ((uint32_t)p[5] << 16) |
-                                      ((uint32_t)p[6] << 8) | p[7]);
-        const int32_t lon = (int32_t)(((uint32_t)p[8] << 24) | ((uint32_t)p[9] << 16) |
-                                      ((uint32_t)p[10] << 8) | p[11]);
+    const auto& p = e.payload;
+    std::printf("[%s] ch%03d %s  type=%02x %-7s len=%zu", ts, e.channel, mode_name(e.mode),
+                e.type, type_name(e.type), p.size());
+    if (e.type == 0x02 && e.beacon.valid) {
+        const BeaconInfo& b = e.beacon;
         std::printf("  id=%06x lat=%.6f lon=%.6f ch=%d rate=%d util=%d list=%d,%d,%d,%d,%d,%d",
-                    rid, lat / 600000.0, lon / 600000.0, p[12], p[13], p[14], p[16], p[17],
-                    p[18], p[19], p[20], p[21]);
-    } else if (f.type == 0x06 && p.size() >= 9) {
-        // TIME: TID(3) then year-2000, month, day, hour, minute, second (UTC).
-        std::printf("  TID=%06x  %04d-%02d-%02d %02d:%02d:%02d UTC", tid24(p), 2000 + p[3],
-                    p[4], p[5], p[6], p[7], p[8]);
-    } else if (f.type == 0x05 && p.size() >= 4) {
-        // CNTL: TID(3), Seq#(1), Data(8).
-        std::printf("  TID=%06x seq=%d data=", tid24(p), p[3]);
-        print_hex(p, 4, 16);
-    } else if ((f.type == 0x33 || f.type == 0x34) && p.size() >= 3) {
-        print_wiu(p);
+                    b.radio_id, b.lat, b.lon, b.channel, b.rate, b.util, b.ch_list[0],
+                    b.ch_list[1], b.ch_list[2], b.ch_list[3], b.ch_list[4], b.ch_list[5]);
+    } else if (e.type == 0x06 && e.time.valid) {
+        const TimeInfo& ti = e.time;
+        std::printf("  TID=%06x  %04d-%02d-%02d %02d:%02d:%02d UTC", ti.tid, ti.year, ti.month,
+                    ti.day, ti.hour, ti.minute, ti.second);
+    } else if (e.type == 0x05 && e.cntl.valid) {
+        std::printf("  TID=%06x seq=%d data=", e.cntl.tid, e.cntl.seq);
+        print_hex(e.cntl.data, 0, 16);
+    } else if ((e.type == 0x33 || e.type == 0x34) && e.wiu.valid) {
+        print_wiu(e.wiu);
     } else if (p.size() >= 3) {
         std::printf("  TID=%06x  ", tid24(p));
         print_hex(p, 3, 32);
@@ -297,13 +222,13 @@ void print_packet(int channel, const char* mode, const Found& f) {
 
 int run_monitor(int argc, char** argv) {
     setvbuf(stdout, nullptr, _IONBF, 0);
-    RtlConfig cfg;
-    cfg.sample_rate = 2304000;
-    cfg.center_freq = 221050000;  // midpoint of the 26 PTC channels
-    cfg.bias_tee = true;
-    cfg.gain_tenths_db = 420;
-    int chunk_ms = 250;
-    int max_errors = 8;
+    EngineConfig ec;
+    ec.rtl.sample_rate = 2304000;
+    ec.rtl.center_freq = 221050000;  // midpoint of the 27 PTC channels
+    ec.rtl.bias_tee = true;
+    ec.rtl.gain_tenths_db = 420;
+    ec.chunk_ms = 250;
+    ec.max_errors = 8;
     double cooldown = 8.0;
     for (int i = 0; i < argc; ++i) {
         std::string a = argv[i];
@@ -312,75 +237,55 @@ int run_monitor(int argc, char** argv) {
             return argv[++i];
         };
         if (a == "-h" || a == "--help") { monitor_usage(); return 0; }
-        else if (a == "-d") cfg.device_index = std::atoi(next());
-        else if (a == "-s") cfg.sample_rate = (uint32_t)std::strtoul(next(), nullptr, 10);
+        else if (a == "-d") ec.rtl.device_index = std::atoi(next());
+        else if (a == "-s") ec.rtl.sample_rate = (uint32_t)std::strtoul(next(), nullptr, 10);
         else if (a == "-g") {
             double g = std::atof(next());
-            cfg.agc = g <= 0; cfg.gain_tenths_db = (int)std::lround(g * 10);
-        } else if (a == "-e") cfg.ppm = std::atoi(next());
-        else if (a == "-b") cfg.bias_tee = std::atoi(next()) != 0;
-        else if (a == "-t") chunk_ms = std::atoi(next());
-        else if (a == "-E") max_errors = std::atoi(next());
+            ec.rtl.agc = g <= 0; ec.rtl.gain_tenths_db = (int)std::lround(g * 10);
+        } else if (a == "-e") ec.rtl.ppm = std::atoi(next());
+        else if (a == "-b") ec.rtl.bias_tee = std::atoi(next()) != 0;
+        else if (a == "-t") ec.chunk_ms = std::atoi(next());
+        else if (a == "-E") ec.max_errors = std::atoi(next());
         else if (a == "-C") cooldown = std::atof(next());
     }
+    if (ec.channels.empty()) ec.channels = default_channels();
 
-    static const int kChans[] = {101, 102, 107, 108, 113, 114, 125, 126, 127, 128,
-                                 131, 132, 134, 141, 142, 147, 148, 153, 154, 165,
-                                 166, 167, 168, 171, 172, 174, 176};
-    const int nchan = (int)(sizeof(kChans) / sizeof(kChans[0]));
+    MonitorEngine eng(ec);
+    Repository repo;
+    std::map<std::string, std::chrono::steady_clock::time_point> last_seen;
+    eng.set_callback([&](const PacketEvent& e) {
+        repo.observe(e);
+        std::string key((const char*)e.payload.data(), e.payload.size());
+        key.push_back((char)e.type);
+        key.push_back((char)e.channel);
+        auto now = std::chrono::steady_clock::now();
+        auto it = last_seen.find(key);
+        if (it != last_seen.end() &&
+            std::chrono::duration<double>(now - it->second).count() < cooldown)
+            return;
+        last_seen[key] = now;
+        print_event(e);
+    });
 
-    const uint32_t fs = cfg.sample_rate;
-    if (fs % 192000u != 0u) fail("sample rate must be a multiple of 192000");
-    const int fr_factor = (int)(fs / 192000u);
-    FirDecimator decfr(fr_factor, 0.45 * 192000.0 / fs, 16 * fr_factor + 1);
-    FirDecimator dechr(2, 0.45 * 96000.0 / 192000.0, 33);
-
-    RtlSource src(cfg);
-    src.open_device();
-    src.configure();
-
-    std::printf("OpenITC monitor - device %d (%s)\n", cfg.device_index,
-                rtl_device_name(cfg.device_index).c_str());
+    std::printf("OpenITC monitor - device %d (%s)\n", ec.rtl.device_index,
+                eng.device_name().c_str());
     const double span = (itc_frequency(176) - itc_frequency(101)) / 1e6;
-    std::printf("  %d channels, center %.3f MHz, span %.3f MHz, rate %u Hz, gain %s,"
+    std::printf("  %zu channels, center %.3f MHz, span %.3f MHz, rate %u Hz, gain %s,"
                 " bias_tee %s\n",
-                nchan, cfg.center_freq / 1e6, span, fs,
-                cfg.agc ? "AGC" : (std::to_string(cfg.gain_tenths_db / 10.0) + " dB").c_str(),
-                cfg.bias_tee ? "on" : "off");
+                ec.channels.size(), ec.rtl.center_freq / 1e6, span, ec.rtl.sample_rate,
+                ec.rtl.agc ? "AGC"
+                           : (std::to_string(ec.rtl.gain_tenths_db / 10.0) + " dB").c_str(),
+                ec.rtl.bias_tee ? "on" : "off");
     std::printf("  scanning... Ctrl-C to stop\n");
 
-    std::map<std::string, std::chrono::steady_clock::time_point> last_seen;
-
-    for (;;) {
-        std::vector<uint8_t> iq;
-        src.read(iq, (size_t)fs * chunk_ms / 1000);
-        std::vector<cf> x0 = to_baseband(iq);
-        for (int ch : kChans) {
-            std::vector<cf> x = x0;
-            mix_shift(x, (double)itc_frequency((uint32_t)ch) - cfg.center_freq, fs);
-            std::vector<cf> yfr;
-            decfr.process(x, yfr);
-            std::vector<cf> yhr;
-            dechr.process(yfr, yhr);
-            const std::vector<cf>* streams[2] = {&yfr, &yhr};
-            const char* modes[2] = {"FR", "HR"};
-            for (int m = 0; m < 2; ++m) {
-                auto found = decode_stream(*streams[m], max_errors);
-                for (const auto& f : found) {
-                    std::string key((const char*)f.payload.data(), f.payload.size());
-                    key.push_back((char)f.type);
-                    key.push_back((char)ch);
-                    auto now = std::chrono::steady_clock::now();
-                    auto it = last_seen.find(key);
-                    if (it != last_seen.end() &&
-                        std::chrono::duration<double>(now - it->second).count() < cooldown)
-                        continue;
-                    last_seen[key] = now;
-                    print_packet(ch, modes[m], f);
-                }
-            }
-        }
+    if (!eng.start()) {
+        std::fprintf(stderr, "error: %s\n", eng.last_error().c_str());
+        return 1;
     }
+    while (eng.running())
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!eng.last_error().empty())
+        std::fprintf(stderr, "error: %s\n", eng.last_error().c_str());
     return 0;
 }
 

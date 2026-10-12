@@ -19,6 +19,9 @@ add_executable(openitc
   src/dsp.cpp
   src/decode.cpp
   src/itc.cpp
+  src/parse.cpp
+  src/repository.cpp
+  src/engine.cpp
   src/native.cpp
 )
 
