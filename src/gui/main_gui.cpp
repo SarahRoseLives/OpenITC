@@ -194,3 +194,16 @@ int main() {
     glfwTerminate();
     return 0;
 }
+
+#if defined(_WIN32)
+// Built as a Windows-subsystem app (no console window). The MinGW entry point
+// is WinMain; forward to our main().
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) { return main(); }
+#endif

@@ -20,6 +20,9 @@ and is not affiliated with or endorsed by any railroad, ITC, or vendor.
 - Block de-interleave, RS(16,12) Reed–Solomon over GF(2^8), CRC-16/ARC.
 - Packet decode, including full **0x02 base-beacon** fields.
 - `monitor`: wideband scan of the whole band, listing packets live until stopped.
+- `openitc-gui`: a desktop dashboard (Dear ImGui + GLFW) with a live **beacon
+  map**, dual local/ITC clocks, an active-WIU board, and a syntax-highlighted
+  frame log. Built as a Windows GUI app (no console window).
 
 ## Status
 
@@ -98,6 +101,26 @@ list; TIME shows the base's UTC clock; CNTL shows the transmitter TID, sequence
 number and payload; WIU (0x33/0x34) shows the wayside unit ID plus a best-effort
 switch/signal indicator decode (the exact per-WIU layout is normally configured
 in ITCMon, so the raw indicator bytes are always shown too).
+
+### GUI dashboard
+
+```sh
+# Launch the desktop dashboard (no console window)
+./build/openitc-gui.exe
+```
+
+The dashboard has a header (SDR status chips and dual **local / ITC (UTC)**
+clocks with drift), a sidebar (session state, active WIUs, latest beacon), a
+live **beacon map** and a colorized **raw frame log** with type/text filters and
+pause/clear/export.
+
+- The map uses **Esri World Imagery** (satellite) tiles, cached under
+  `%LOCALAPPDATA%\OpenITC\tiles`. Override the provider with environment
+  variables: `OPENITC_TILE_URL` (supports `{z}/{x}/{y}` or `{z}/{y}/{x}` and
+  `{key}`), `OPENITC_TILE_UA` (User-Agent), and `OPENITC_TILE_KEY`.
+- The SDR selector lists detected RTL-SDR devices; **gain**/**AGC**, **ppm**,
+  **bias tee** and **chunk** are configurable (restart to apply).
+- Decoded packets are recorded to `%LOCALAPPDATA%\OpenITC\openitc.db` (SQLite).
 
 ### Capture / channelize
 

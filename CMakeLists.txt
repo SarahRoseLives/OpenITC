@@ -57,7 +57,7 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC PkgConfig::GLFW opengl32)
 
 # ---- GUI front-end ----
-add_executable(openitc-gui
+add_executable(openitc-gui WIN32
   src/gui/main_gui.cpp
   src/gui/app.cpp
   src/gui/panels.cpp
