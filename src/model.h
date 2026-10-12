@@ -82,6 +82,7 @@ struct WiuInfo {
 
 // One fully decoded packet as produced by the monitor engine.
 struct PacketEvent {
+    unsigned long long seq = 0;  // monotonic id assigned by the engine
     double t_unix = 0.0;  // PC wall-clock time (unix seconds, UTC-based) decoded
     int channel = 0;      // ITC channel number
     int mode = 0;         // 0 = FR, 1 = HR

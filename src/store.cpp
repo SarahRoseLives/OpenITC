@@ -6,6 +6,8 @@
 
 #include <sqlite3.h>
 
+#include "repository.h"
+
 namespace openitc {
 namespace {
 
@@ -174,24 +176,12 @@ void Store::write_batch(const std::vector<PacketEvent>& batch) {
             sqlite3_reset(wiu);
         }
         if (e.type == 0x06 && e.time.valid && tim) {
-            // Reconstruct the ITC UTC stamp the same way the repository does.
-            std::tm tm{};
-            tm.tm_year = e.time.year - 1900;
-            tm.tm_mon = e.time.month - 1;
-            tm.tm_mday = e.time.day;
-            tm.tm_hour = e.time.hour;
-            tm.tm_min = e.time.minute;
-            tm.tm_sec = e.time.second;
-#ifdef _WIN32
-            const time_t itc = _mkgmtime(&tm);
-#else
-            const time_t itc = timegm(&tm);
-#endif
+            const double itc = itc_time_to_unix(e.time);
             sqlite3_bind_int(tim, 1, (int)e.time.tid);
             sqlite3_bind_double(tim, 2, e.t_unix);
-            if (itc != (time_t)-1) {
-                sqlite3_bind_double(tim, 3, (double)itc);
-                sqlite3_bind_double(tim, 4, (double)itc - e.t_unix);
+            if (itc > 0.0) {
+                sqlite3_bind_double(tim, 3, itc);
+                sqlite3_bind_double(tim, 4, itc - e.t_unix);
             } else {
                 sqlite3_bind_null(tim, 3);
                 sqlite3_bind_null(tim, 4);

@@ -3,10 +3,9 @@
 #include <ctime>
 
 namespace openitc {
-namespace {
 
 // Unix seconds for a UTC calendar time. Returns 0 on an invalid date.
-double time_to_unix(const TimeInfo& t) {
+double itc_time_to_unix(const TimeInfo& t) {
     std::tm tm{};
     tm.tm_year = t.year - 1900;
     tm.tm_mon = t.month - 1;
@@ -22,8 +21,6 @@ double time_to_unix(const TimeInfo& t) {
     if (v == (time_t)-1) return 0.0;
     return (double)v;
 }
-
-}  // namespace
 
 void Repository::observe(const PacketEvent& e) {
     std::lock_guard<std::mutex> lk(mu_);
@@ -65,7 +62,7 @@ void Repository::observe(const PacketEvent& e) {
             r.channel = e.channel;
             r.mode = e.mode;
             r.count++;
-            const double itc = time_to_unix(e.time);
+            const double itc = itc_time_to_unix(e.time);
             if (itc > 0.0) {
                 r.itc_unix = itc;
                 r.drift = itc - e.t_unix;

@@ -111,6 +111,7 @@ void MonitorEngine::run() {
     FirDecimator dechr(2, 0.45 * 96000.0 / 192000.0, 33);
 
     const size_t chunk = (size_t)fs * (size_t)cfg_.chunk_ms / 1000;
+    unsigned long long seq = 0;
 
     while (running_.load()) {
         std::vector<uint8_t> iq;
@@ -139,6 +140,7 @@ void MonitorEngine::run() {
                 auto found = decode_stream(*streams[m], cfg_.max_errors, local_hits);
                 for (auto& f : found) {
                     PacketEvent e;
+                    e.seq = ++seq;
                     e.t_unix = (double)std::time(nullptr);
                     e.channel = ch;
                     e.mode = m;

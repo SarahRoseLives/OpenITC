@@ -10,6 +10,9 @@
 
 namespace openitc {
 
+// ITC UTC calendar time (from a TIME packet) as unix seconds; 0 if invalid.
+double itc_time_to_unix(const TimeInfo& t);
+
 struct BeaconRecord {
     BeaconInfo info;
     double first_seen = 0.0;
