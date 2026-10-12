@@ -13,6 +13,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(RTLSDR REQUIRED IMPORTED_TARGET librtlsdr)
 pkg_check_modules(LIBZMQ REQUIRED IMPORTED_TARGET libzmq)
 pkg_check_modules(GLFW REQUIRED IMPORTED_TARGET glfw3)
+pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
 
 # ---- core: SDR capture + native PHY + decode engine (no UI) ----
 add_library(openitc_core STATIC
@@ -22,9 +23,10 @@ add_library(openitc_core STATIC
   src/parse.cpp
   src/repository.cpp
   src/engine.cpp
+  src/store.cpp
 )
 target_include_directories(openitc_core PUBLIC src)
-target_link_libraries(openitc_core PUBLIC PkgConfig::RTLSDR ws2_32)
+target_link_libraries(openitc_core PUBLIC PkgConfig::RTLSDR PkgConfig::SQLITE3 ws2_32)
 target_compile_options(openitc_core PRIVATE -Wall -Wextra)
 
 # ---- console front-end ----

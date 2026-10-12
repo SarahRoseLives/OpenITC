@@ -3,9 +3,11 @@
 // full dashboards (map, WIU board, filters) land in later milestones.
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,6 +21,7 @@
 #include "engine.h"
 #include "model.h"
 #include "repository.h"
+#include "store.h"
 
 namespace {
 
@@ -87,6 +90,15 @@ void local_hms(double t_unix, char* out, size_t n) {
     std::strftime(out, n, "%H:%M:%S", std::localtime(&t));
 }
 
+std::string default_db_path() {
+    const char* la = std::getenv("LOCALAPPDATA");
+    std::filesystem::path dir =
+        la ? std::filesystem::path(la) / "OpenITC" : std::filesystem::path(".");
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return (dir / "openitc.db").string();
+}
+
 }  // namespace
 
 int main() {
@@ -125,14 +137,20 @@ int main() {
 
     openitc::Repository repo;
     PacketLog log;
+    openitc::Store store;
+    const std::string db_path = default_db_path();
+    char status_msg[256] = "";
+    if (!store.open(db_path))
+        std::snprintf(status_msg, sizeof(status_msg), "db not open: %s", db_path.c_str());
+    bool recording = true;
     std::unique_ptr<openitc::MonitorEngine> engine;
     bool running = false;
-    char status_msg[256] = "";
 
     auto subscribe = [&](openitc::MonitorEngine& eng) {
         eng.set_callback([&](const PacketEvent& e) {
             repo.observe(e);
             log.add(e);
+            if (recording && store.is_open()) store.observe(e);
         });
     };
     auto do_start = [&]() {
@@ -197,6 +215,8 @@ int main() {
         } else if (ImGui::Button("Start")) {
             do_start();
         }
+        ImGui::SameLine();
+        ImGui::Checkbox("record", &recording);
 
         const openitc::EngineStats st = engine ? engine->stats() : openitc::EngineStats{};
         const std::string devname =
@@ -210,6 +230,15 @@ int main() {
                     ec.rtl.bias_tee ? "on" : "off");
         ImGui::Text("packets %llu  (%.0f/min)  |  chunks %llu  |  sync hits %llu", st.packets,
                     repo.packets_per_min(), st.chunks, st.sync_hits);
+        static double db_t = 0.0;
+        static long db_count = 0;
+        const double nowt = ImGui::GetTime();
+        if (store.is_open() && nowt - db_t > 1.0) {
+            db_count = store.count();
+            db_t = nowt;
+        }
+        ImGui::Text("db %s  |  rows %ld", store.is_open() ? db_path.c_str() : "(not open)",
+                    db_count);
         if (status_msg[0]) ImGui::TextColored(ImVec4(1, 0.5f, 0.3f, 1), "%s", status_msg);
 
         // ---- clock preview (ITC vs local) ----
@@ -282,6 +311,7 @@ int main() {
     }
 
     if (engine) engine->stop();
+    store.close();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
