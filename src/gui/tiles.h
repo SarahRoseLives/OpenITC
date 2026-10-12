@@ -40,6 +40,8 @@ public:
     int failed() const { return failed_count_.load(); }
     int pending() const { return pending_count_.load(); }
 
+    const std::string& attribution() const { return attribution_; }
+
 private:
     struct Key {
         int z = 0, x = 0, y = 0;
@@ -57,6 +59,7 @@ private:
         unsigned gl = 0;
         std::vector<uint8_t> rgba;
         int w = 0, h = 0;
+        double retry_at = 0.0;  // don't re-request a failed tile before this
     };
 
     void worker();
@@ -68,6 +71,12 @@ private:
 
     std::string dir_;
     std::string url_;
+    std::string provider_ = "esri";
+    std::string attribution_ = "Esri, Maxar, Earthstar Geographics";
+    std::string ua_;
+    double next_net_ = 0.0;        // earliest time for the next HTTP request
+    double net_block_until_ = 0.0; // provider asked us to back off
+    int consec_fail_ = 0;
     std::thread th_;
     std::mutex mu_;
     std::condition_variable cv_;

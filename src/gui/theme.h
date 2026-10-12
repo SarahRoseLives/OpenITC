@@ -86,21 +86,16 @@ inline void apply() {
     c[ImGuiCol_TitleBgActive] = panel;
 }
 
-// A rounded "card" region with an optional gradient top strip and border.
+// A rounded "card" region with a border. (No bright accent strip: it sat too
+// close to the section titles and hurt readability.)
 inline bool begin_card(const char* id, const ImVec2& size, bool grad = true,
                        bool scroll = false) {
+    (void)grad;
     ImGui::PushStyleColor(ImGuiCol_ChildBg, panel);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 12));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14, 14));
     ImGuiWindowFlags f = scroll ? 0 : ImGuiWindowFlags_NoScrollbar;
-    const bool open = ImGui::BeginChild(id, size, ImGuiChildFlags_None, f);
-    if (open && grad) {
-        const ImVec2 p = ImGui::GetWindowPos();
-        const float w = ImGui::GetWindowWidth();
-        ImGui::GetWindowDrawList()->AddRectFilledMultiColor(
-            p, ImVec2(p.x + w, p.y + 3), u(blue), u(cyan), u(cyan), u(blue));
-    }
-    return open;
+    return ImGui::BeginChild(id, size, ImGuiChildFlags_None, f);
 }
 
 inline void end_card() {

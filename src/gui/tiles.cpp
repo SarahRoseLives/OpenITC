@@ -1,11 +1,15 @@
 #include "tiles.h"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <thread>
 
 #include "theme.h"
 
@@ -32,8 +36,18 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTile = 256.0;
+constexpr double kMinNetGap = 0.25;  // min seconds between tile requests
+constexpr const char* kDefaultUA =
+    "OpenITC/0.1 (+https://sarahsforge.dev; ITC PTC decoder)";
+
+double now_s() {
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 std::string replace_all(std::string s, const std::string& from, const std::string& to) {
+    if (from.empty()) return s;
     size_t p = 0;
     while ((p = s.find(from, p)) != std::string::npos) {
         s.replace(p, from.size(), to);
@@ -42,9 +56,12 @@ std::string replace_all(std::string s, const std::string& from, const std::strin
     return s;
 }
 
+std::wstring widen(const std::string& s) { return std::wstring(s.begin(), s.end()); }
+
 #ifdef _WIN32
-bool http_get(const std::string& url, std::vector<uint8_t>& out) {
-    const std::wstring wurl(url.begin(), url.end());
+// Returns the HTTP status code (e.g. 200/403/429), or 0 on transport failure.
+int http_get(const std::string& url, const std::string& ua, std::vector<uint8_t>& out) {
+    const std::wstring wurl = widen(url);
     URL_COMPONENTS uc;
     ZeroMemory(&uc, sizeof(uc));
     uc.dwStructSize = sizeof(uc);
@@ -54,24 +71,25 @@ bool http_get(const std::string& url, std::vector<uint8_t>& out) {
     uc.dwHostNameLength = 255;
     uc.lpszUrlPath = path;
     uc.dwUrlPathLength = 2047;
-    if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) return false;
+    if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) return 0;
     const bool https = (uc.nScheme == INTERNET_SCHEME_HTTPS);
 
-    HINTERNET hs = WinHttpOpen(L"OpenITC/0.1 (+https://sarahsforge.dev)",
-                               WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-                               WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hs) return false;
+    HINTERNET hs = WinHttpOpen(widen(ua).c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hs) return 0;
     WinHttpSetTimeouts(hs, 8000, 8000, 8000, 8000);
 
-    bool ok = false;
+    int status_code = 0;
     HINTERNET hc = WinHttpConnect(hs, host, uc.nPort, 0);
     if (hc) {
-        HINTERNET hr = WinHttpOpenRequest(hc, L"GET", path, nullptr, WINHTTP_NO_REFERER,
-                                          WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                          https ? WINHTTP_FLAG_SECURE : 0);
+        HINTERNET hr =
+            WinHttpOpenRequest(hc, L"GET", path, nullptr, WINHTTP_NO_REFERER,
+                               WINHTTP_DEFAULT_ACCEPT_TYPES,
+                               https ? WINHTTP_FLAG_SECURE : 0);
         if (hr) {
-            const wchar_t* hdr = L"User-Agent: OpenITC/0.1\r\nAccept: image/png,*/*\r\n";
-            WinHttpAddRequestHeaders(hr, hdr, (DWORD)-1L,
+            const std::wstring hdr = L"Accept: image/png,image/jpeg,*/*\r\n"
+                                     L"Accept-Encoding: identity\r\n";
+            WinHttpAddRequestHeaders(hr, hdr.c_str(), (DWORD)-1L,
                                      WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
             if (WinHttpSendRequest(hr, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                    WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
@@ -80,13 +98,11 @@ bool http_get(const std::string& url, std::vector<uint8_t>& out) {
                 WinHttpQueryHeaders(hr, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                     WINHTTP_HEADER_NAME_BY_INDEX, &status, &len,
                                     WINHTTP_NO_HEADER_INDEX);
-                if (status == 200) {
+                status_code = (int)status;
+                if (status_code == 200) {
                     DWORD avail = 0;
                     for (;;) {
-                        if (!WinHttpQueryDataAvailable(hr, &avail) || avail == 0) {
-                            ok = !out.empty();
-                            break;
-                        }
+                        if (!WinHttpQueryDataAvailable(hr, &avail) || avail == 0) break;
                         std::vector<uint8_t> buf(avail);
                         DWORD read = 0;
                         if (!WinHttpReadData(hr, buf.data(), avail, &read)) break;
@@ -99,10 +115,10 @@ bool http_get(const std::string& url, std::vector<uint8_t>& out) {
         WinHttpCloseHandle(hc);
     }
     WinHttpCloseHandle(hs);
-    return ok;
+    return status_code;
 }
 #else
-bool http_get(const std::string&, std::vector<uint8_t>&) { return false; }
+int http_get(const std::string&, const std::string&, std::vector<uint8_t>&) { return 0; }
 #endif
 
 double merc_v(double lat_deg) {
@@ -127,17 +143,44 @@ TileCache::~TileCache() {
 
 void TileCache::init(const std::string& cache_dir, const std::string& url_template) {
     dir_ = cache_dir;
-    url_ = url_template.empty() ? "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                                : url_template;
+
+    const char* env_url = std::getenv("OPENITC_TILE_URL");
+    const char* env_ua = std::getenv("OPENITC_TILE_UA");
+    const char* env_key = std::getenv("OPENITC_TILE_KEY");
+    ua_ = (env_ua && *env_ua) ? env_ua : kDefaultUA;
+
+    // Default: Esri World Imagery (satellite). Note the {z}/{y}/{x} order.
+    url_ = (env_url && *env_url)
+               ? env_url
+               : (url_template.empty()
+                      ? "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                        "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      : url_template);
+    if (env_key && *env_key) url_ = replace_all(url_, "{key}", env_key);
+
+    provider_ = "tiles";
+    const size_t p = url_.find("://");
+    if (p != std::string::npos) {
+        const size_t s = p + 3;
+        const size_t e = url_.find('/', s);
+        std::string host = url_.substr(s, e == std::string::npos ? std::string::npos : e - s);
+        for (char& c : host)
+            if (!std::isalnum((unsigned char)c)) c = '_';
+        if (!host.empty()) provider_ = host;
+    }
+    attribution_ = provider_.find("arcgis") != std::string::npos
+                       ? "Esri, Maxar, Earthstar Geographics"
+                       : "OpenStreetMap contributors";
+
     std::error_code ec;
-    std::filesystem::create_directories(dir_, ec);
+    std::filesystem::create_directories(dir_ + "/" + provider_, ec);
     stop_ = false;
     th_ = std::thread([this] { worker(); });
 }
 
 std::string TileCache::path_for(const Key& k) const {
-    return dir_ + "/" + std::to_string(k.z) + "/" + std::to_string(k.x) + "/" +
-           std::to_string(k.y) + ".png";
+    return dir_ + "/" + provider_ + "/" + std::to_string(k.z) + "/" + std::to_string(k.x) +
+           "/" + std::to_string(k.y) + ".png";
 }
 
 std::string TileCache::url_for(const Key& k) const {
@@ -195,13 +238,49 @@ void TileCache::worker() {
 
         std::vector<uint8_t> png;
         bool have = load_disk(k, png);
-        if (!have && online_) have = http_get(url_for(k), png);
-        if (have) save_disk(k, png);
+        int status = 200;  // disk hit counts as a success
+
+        if (!have) {
+            double block_until = 0.0, next_net = 0.0;
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                block_until = net_block_until_;
+                next_net = next_net_;
+            }
+            if (online_ && now_s() >= block_until) {
+                const double wait = next_net - now_s();
+                if (wait > 0.0)
+                    std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+                status = http_get(url_for(k), ua_, png);
+                {
+                    std::lock_guard<std::mutex> lk(mu_);
+                    next_net_ = now_s() + kMinNetGap;
+                    if (status == 200)
+                        consec_fail_ = 0;
+                    else if (status == 429 || status == 403) {
+                        // Provider asked us to slow down/stop: back off hard and
+                        // make no further requests during the window.
+                        net_block_until_ = now_s() + (status == 429 ? 900.0 : 600.0);
+                        consec_fail_ = 0;
+                    } else if (++consec_fail_ >= 8) {
+                        net_block_until_ = now_s() + 60.0;
+                        consec_fail_ = 0;
+                    }
+                }
+                if (status == 200 && !png.empty()) {
+                    have = true;
+                    save_disk(k, png);
+                }
+            } else {
+                status = 0;  // blocked/offline: no request, treat as a soft fail
+            }
+        }
 
         bool decoded = false;
         if (have) {
             int w = 0, h = 0, ch = 0;
-            unsigned char* px = stbi_load_from_memory(png.data(), (int)png.size(), &w, &h, &ch, 4);
+            unsigned char* px =
+                stbi_load_from_memory(png.data(), (int)png.size(), &w, &h, &ch, 4);
             if (px) {
                 std::lock_guard<std::mutex> lk(mu_);
                 auto it = tiles_.find(k);
@@ -218,7 +297,15 @@ void TileCache::worker() {
         if (!decoded) {
             std::lock_guard<std::mutex> lk(mu_);
             auto it = tiles_.find(k);
-            if (it != tiles_.end()) it->second.state = Failed;
+            if (it != tiles_.end()) {
+                it->second.state = Failed;
+                double d = 30.0;
+                if (status == 429)
+                    d = 600.0;
+                else if (status == 403)
+                    d = 300.0;
+                it->second.retry_at = now_s() + d;
+            }
             failed_count_.fetch_add(1);
         }
     }
@@ -236,7 +323,7 @@ ImTextureID TileCache::texture(int z, int x, int y) {
     }
     Tile& t = it->second;
     if (t.state == Ready && t.gl != 0) return (ImTextureID)(uintptr_t)t.gl;
-    if (t.state == Failed) {
+    if (t.state == Failed && now_s() >= t.retry_at) {
         t.state = Pending;
         enqueue(k);
     }
@@ -343,7 +430,7 @@ bool MapView::draw(TileCache& cache, const ImVec2& size,
         dl->AddCircle(ImVec2(sx, sy), 5.0f, IM_COL32(255, 255, 255, 200), 0, 1.5f);
         char label[32];
         std::snprintf(label, sizeof(label), "%06x", b.info.radio_id);
-        dl->AddText(ImVec2(sx + 7, sy - 7), IM_COL32(255, 255, 255, 230), label);
+        dl->AddText(ImVec2(sx + 7, sy - 7), IM_COL32(255, 255, 255, 235), label);
         if (clicked && io.MousePos.x > sx - 9 && io.MousePos.x < sx + 9 &&
             io.MousePos.y > sy - 9 && io.MousePos.y < sy + 9) {
             clicked_radio_id = b.info.radio_id;
@@ -352,9 +439,9 @@ bool MapView::draw(TileCache& cache, const ImVec2& size,
 
     dl->PopClipRect();
     dl->AddRect(p0, p1, theme::u(theme::border));
-    const char* attr = "c OpenStreetMap contributors";
-    dl->AddText(ImVec2(p1.x - ImGui::CalcTextSize(attr).x - 6, p1.y - 16),
-                IM_COL32(160, 160, 170, 220), attr);
+    const std::string attr = cache.attribution();
+    dl->AddText(ImVec2(p1.x - ImGui::CalcTextSize(attr.c_str()).x - 6, p1.y - 16),
+                IM_COL32(200, 200, 210, 220), attr.c_str());
     return clicked;
 }
 

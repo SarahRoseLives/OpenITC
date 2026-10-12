@@ -63,6 +63,7 @@ struct AppState {
     bool recording = true;
     std::string status;
     std::string db_path;
+    std::vector<std::string> sdr_devices;  // probed at startup
 
     Filters filters;
 
