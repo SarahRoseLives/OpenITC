@@ -50,7 +50,9 @@ The 27 on-air channels span 220.1125–221.9875 MHz (1.875 MHz).
   → CRC-16/ARC (`0xA001`) → payload.
 
 Full details, including the reverse-engineering notes, are in
-[`docs/reverse-engineering.md`](docs/reverse-engineering.md).
+[`docs/reverse-engineering.md`](docs/reverse-engineering.md). For a
+plain-language explanation of the whole ITC system (band, framing, messaging,
+wayside status, and security), see [`docs/how-itc-works.md`](docs/how-itc-works.md).
 
 ## Build (MSYS2 MinGW-w64)
 
